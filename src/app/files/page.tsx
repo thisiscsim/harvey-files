@@ -26,6 +26,7 @@ import { Spinner } from "@/components/ui/spinner";
 import Image from "next/image";
 import { SvgIcon } from "@/components/svg-icon";
 import { AnimatedBackground } from "../../../components/motion-primitives/animated-background";
+import { UploadToast } from "@/components/upload-toast";
 import { TextLoop } from "../../../components/motion-primitives/text-loop";
 import { TextShimmer } from "../../../components/motion-primitives/text-shimmer";
 import ThinkingState from "@/components/thinking-state";
@@ -517,6 +518,82 @@ export default function FilesPage() {
     setSearchQuery(fullQuery);
     triggerNlSearchRef.current(fullQuery);
   }, []);
+
+  // Drag and drop state
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragOver(false);
+
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles.length > 0) {
+      const validFiles = Array.from(droppedFiles);
+      document.dispatchEvent(new CustomEvent("fileSelect", {
+        bubbles: true,
+        detail: { validFiles, invalidFiles: [] },
+      }));
+    }
+  }, []);
+
+  // Listen for successful uploads to save to localStorage
+  useEffect(() => {
+    const categories = [
+      { label: 'Compliance Policy', color: '#CE5347' },
+      { label: 'Audit Report', color: '#638DE0' },
+      { label: 'Regulatory Filing', color: '#F2D646' },
+      { label: 'Risk Assessment', color: '#93C5FD' },
+      { label: 'Evidence File', color: '#86EFAC' },
+    ];
+    const handleUploadComplete = (e: CustomEvent) => {
+      const { fileName, fileId } = e.detail;
+      const newFile = {
+        id: `upload-${fileId}`,
+        name: fileName,
+        size: Math.floor(Math.random() * 5000000) + 100000,
+        type: fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf'
+          : fileName.toLowerCase().endsWith('.docx') || fileName.toLowerCase().endsWith('.doc') ? 'application/docx'
+          : fileName.toLowerCase().endsWith('.xlsx') || fileName.toLowerCase().endsWith('.xls') ? 'application/xlsx'
+          : 'application/octet-stream',
+        uploadedAt: new Date().toISOString(),
+        createdBy: 'You',
+        parentPath: currentPath,
+        category: categories[Math.floor(Math.random() * categories.length)],
+      };
+      const existing = JSON.parse(localStorage.getItem('harvey-saved-files') || '[]');
+      localStorage.setItem('harvey-saved-files', JSON.stringify([...existing, newFile]));
+      setSavedFiles(prev => [...prev, { ...newFile, uploadedAt: new Date(newFile.uploadedAt) } as UploadedFile]);
+    };
+
+    document.addEventListener("fileUploadComplete", handleUploadComplete as EventListener);
+    return () => document.removeEventListener("fileUploadComplete", handleUploadComplete as EventListener);
+  }, [currentPath]);
 
   // Suggestions carousel scroll ref
   const suggestionsRef = useRef<HTMLDivElement>(null);
@@ -1020,7 +1097,13 @@ export default function FilesPage() {
   const isInChatMode = chatThreads.length > 0;
   
   return (
-    <div className="flex h-screen w-full">
+    <div
+      className="flex h-screen w-full"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleFileDrop}
+    >
       <AppSidebar />
       
       <SidebarInset>
@@ -2288,6 +2371,28 @@ export default function FilesPage() {
           </div>
         </div>
       </SidebarInset>
+
+      {/* Upload toast */}
+      <UploadToast />
+
+      {/* Drag and drop overlay */}
+      <AnimatePresence>
+        {isDragOver && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-bg-base/90"
+          >
+            <div className="flex flex-col items-center gap-3">
+              <Upload className="w-6 h-6 text-fg-muted" />
+              <p className="text-base font-semibold text-fg-base">Drop your files here</p>
+              <p className="text-sm text-fg-muted">Files will be added to {isRoot ? 'All files' : currentFolderName}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
