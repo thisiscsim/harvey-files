@@ -960,7 +960,14 @@ export default function AssistantChatPage({
     const msg = messages[messageIndex];
     if (msg?.filesData) {
       const savedFiles = JSON.parse(localStorage.getItem('harvey-saved-files') || '[]');
-      const newFiles = msg.filesData.map(f => ({
+      const categories = [
+        { label: 'Compliance Policy', color: '#CE5347' },
+        { label: 'Audit Report', color: '#638DE0' },
+        { label: 'Regulatory Filing', color: '#F2D646' },
+        { label: 'Risk Assessment', color: '#93C5FD' },
+        { label: 'Evidence File', color: '#86EFAC' },
+      ];
+      const newFiles = msg.filesData.map((f, i) => ({
         id: `saved-${Date.now()}-${f.id}`,
         name: f.name,
         size: f.size ? parseInt(f.size) * 1024 : 0,
@@ -972,6 +979,7 @@ export default function AssistantChatPage({
         uploadedAt: new Date().toISOString(),
         createdBy: 'You',
         parentPath: '',
+        category: categories[i % categories.length],
       }));
       localStorage.setItem('harvey-saved-files', JSON.stringify([...savedFiles, ...newFiles]));
     }

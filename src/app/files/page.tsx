@@ -7,7 +7,7 @@ import {
   FileIcon, MessageSquare, Upload, Share2, Edit3,
   Scale, Paperclip, Mic, CornerDownLeft, CloudUpload, FolderPlus, SlidersHorizontal,
   Plus, Copy, Download, RotateCcw, ThumbsUp, ThumbsDown, ListPlus, SquarePen,
-  Search, Star, Sparkles, Eye, Trash2, ArrowRightFromLine, FilePlus2, MoreHorizontal, BookOpen
+  Search, Star, Sparkles, Eye, Trash2, ArrowRightFromLine, FilePlus2, MoreHorizontal, BookOpen, X
 } from "lucide-react";
 import {
   useReactTable,
@@ -29,6 +29,7 @@ import { AnimatedBackground } from "../../../components/motion-primitives/animat
 import { TextLoop } from "../../../components/motion-primitives/text-loop";
 import { TextShimmer } from "../../../components/motion-primitives/text-shimmer";
 import ThinkingState from "@/components/thinking-state";
+import { Command } from "cmdk";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -73,8 +74,8 @@ const getFileIconPath = (fileName: string, mimeType: string): string => {
   const lowerType = mimeType.toLowerCase();
   if (lowerType === 'folder') return '/folderIcon.svg';
   if (lowerName.endsWith('.pdf') || lowerType.includes('pdf')) return '/pdf-icon.svg';
-  if (lowerName.endsWith('.doc') || lowerName.endsWith('.docx') || lowerType.includes('word') || lowerType.includes('document')) return '/docx-icon.svg';
-  if (lowerName.endsWith('.xls') || lowerName.endsWith('.xlsx') || lowerName.endsWith('.csv') || lowerType.includes('spreadsheet') || lowerType.includes('excel') || lowerType.includes('csv')) return '/xlsx-icon.svg';
+  if (lowerName.endsWith('.doc') || lowerName.endsWith('.docx') || lowerType.includes('word') || lowerType.includes('document')) return '/msword.svg';
+  if (lowerName.endsWith('.xls') || lowerName.endsWith('.xlsx') || lowerName.endsWith('.csv') || lowerType.includes('spreadsheet') || lowerType.includes('excel') || lowerType.includes('csv')) return '/xls.svg';
   return '/file.svg';
 };
 
@@ -260,11 +261,19 @@ export default function FilesPage() {
   const [organizedFolders, setOrganizedFolders] = useState<UploadedFile[]>([]);
   const [groupedFileIds, setGroupedFileIds] = useState<Set<string>>(new Set());
   
-  // Filter files for current path
-  const currentFiles = useMemo(() => [
-    ...mergedFiles.filter(f => f.parentPath === currentPath && !groupedFileIds.has(f.id)),
-    ...organizedFolders.filter(f => f.parentPath === currentPath),
-  ], [mergedFiles, currentPath, organizedFolders, groupedFileIds]);
+  // Filter files for current path, folders first, then by most recent
+  const currentFiles = useMemo(() => {
+    const all = [
+      ...mergedFiles.filter(f => f.parentPath === currentPath && !groupedFileIds.has(f.id)),
+      ...organizedFolders.filter(f => f.parentPath === currentPath),
+    ];
+    return all.sort((a, b) => {
+      const aIsFolder = a.type === 'folder' ? 0 : 1;
+      const bIsFolder = b.type === 'folder' ? 0 : 1;
+      if (aIsFolder !== bIsFolder) return aIsFolder - bIsFolder;
+      return new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime();
+    });
+  }, [mergedFiles, currentPath, organizedFolders, groupedFileIds]);
   
   // Build breadcrumb segments
   const breadcrumbs = useMemo(() => {
@@ -369,6 +378,22 @@ export default function FilesPage() {
     }, 2500);
   }, [summaryState, currentPath, fileCount, folderCount]);
 
+  // Starred files state
+  const [starredFileIds, setStarredFileIds] = useState<Set<string>>(new Set());
+  const [starredFilterActive, setStarredFilterActive] = useState(false);
+  
+  const toggleStarred = useCallback((fileId: string) => {
+    setStarredFileIds(prev => {
+      const next = new Set(prev);
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+  }, []);
+
   // Reset summary and organized folders when navigating to a different folder
   useEffect(() => {
     setSummaryState('idle');
@@ -377,6 +402,122 @@ export default function FilesPage() {
     setGroupedFileIds(new Set());
   }, [currentPath]);
   
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [searchFilterQuery, setSearchFilterQuery] = useState('');
+  const [searchPersonFilter, setSearchPersonFilter] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  const recentlyUsed = useMemo(() => allFiles.filter(f => f.type !== 'folder').slice(0, 4), []);
+
+  const isNaturalLanguage = useCallback((query: string): boolean => {
+    const words = query.trim().split(/\s+/);
+    if (words.length >= 4) return true;
+    const nlStarters = ['what', 'show', 'find', 'where', 'how', 'which', 'list', 'get', 'give'];
+    if (nlStarters.some(w => query.toLowerCase().startsWith(w))) return true;
+    return false;
+  }, []);
+
+  const nlSuggestions = useMemo(() => {
+    if (!searchQuery || !isNaturalLanguage(searchQuery)) return [];
+    const q = searchQuery.toLowerCase().trim();
+    const completions = [
+      'all supply agreements',
+      'compliance reports from last quarter',
+      'files created by Harvey',
+      'risk assessment documents',
+      'audit findings and recommendations',
+      'regulatory filings from 2026',
+      'documents from Emily Zhang',
+      'due diligence materials',
+    ];
+    const filtered = completions.filter(c => !q.includes(c.split(' ')[0]));
+    return filtered.slice(0, 4).map(c => ({ prefix: searchQuery, completion: c }));
+  }, [searchQuery, isNaturalLanguage]);
+
+  const searchResults = useMemo(() => {
+    if (!searchQuery || isNaturalLanguage(searchQuery)) return [];
+    const q = searchQuery.toLowerCase();
+    return allFiles.filter(f => f.name.toLowerCase().includes(q)).slice(0, 4);
+  }, [searchQuery, isNaturalLanguage]);
+
+  const searchPeople = useMemo(() => {
+    if (!searchQuery || isNaturalLanguage(searchQuery)) return [];
+    const q = searchQuery.toLowerCase();
+    const people = new Set<string>();
+    allFiles.forEach(f => {
+      if (f.createdBy.toLowerCase().includes(q)) people.add(f.createdBy);
+    });
+    return Array.from(people).slice(0, 3);
+  }, [searchQuery, isNaturalLanguage]);
+
+  // "/" shortcut to focus search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setIsSearchFocused(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const triggerNlSearchRef = useRef<(query: string) => void>(() => {});
+
+  const handleSearchEnter = useCallback(() => {
+    if (!searchQuery.trim()) return;
+    if (isNaturalLanguage(searchQuery)) {
+      triggerNlSearchRef.current(searchQuery);
+    } else {
+      if (searchResults.length > 0) {
+        const file = searchResults[0];
+        if (file.type === 'folder' && file.slug) {
+          const path = file.parentPath ? `${file.parentPath}/${file.slug}` : file.slug;
+          router.push(`/files/${path}`);
+        } else if (file.parentPath !== currentPath) {
+          router.push(`/files/${file.parentPath || ''}`);
+        }
+        setIsSearchFocused(false);
+        setSearchQuery('');
+      }
+    }
+  }, [searchQuery, isNaturalLanguage, searchResults, currentPath, router]);
+
+  const handleSearchFileClick = useCallback((file: UploadedFile) => {
+    if (file.type === 'folder' && file.slug) {
+      const path = file.parentPath ? `${file.parentPath}/${file.slug}` : file.slug;
+      router.push(`/files/${path}`);
+    } else if (file.parentPath !== currentPath) {
+      router.push(`/files/${file.parentPath || ''}`);
+    }
+    setIsSearchFocused(false);
+    setSearchQuery('');
+  }, [currentPath, router]);
+
+  const handleAskHarvey = useCallback(() => {
+    triggerNlSearchRef.current(searchQuery);
+  }, [searchQuery]);
+
+  const handleNlSuggestionClick = useCallback((suggestion: { prefix: string; completion: string }) => {
+    const fullQuery = `${suggestion.prefix} ${suggestion.completion}`;
+    setSearchQuery(fullQuery);
+    triggerNlSearchRef.current(fullQuery);
+  }, []);
+
   // Suggestions carousel scroll ref
   const suggestionsRef = useRef<HTMLDivElement>(null);
   
@@ -460,10 +601,22 @@ export default function FilesPage() {
       cell: info => {
         const file = info.row.original;
         const iconPath = getFileIconPath(file.name, file.type);
+        const isStarred = starredFileIds.has(file.id);
+        const isRowHovered = hoveredRowId === file.id;
         return (
           <div className="flex items-center gap-2 min-w-0">
             <img src={iconPath} alt="" className="w-4 h-4 flex-shrink-0" />
             <span className="text-sm text-fg-base truncate leading-5">{info.getValue()}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleStarred(file.id); }}
+              className={cn(
+                "w-4 h-4 flex-shrink-0 transition-colors",
+                isStarred ? "text-amber-400" : "text-fg-disabled hover:text-amber-400",
+                !isStarred && !isRowHovered && "opacity-0"
+              )}
+            >
+              <Star className="w-3.5 h-3.5" fill={isStarred ? "currentColor" : "none"} />
+            </button>
           </div>
         );
       },
@@ -474,21 +627,34 @@ export default function FilesPage() {
         const category = info.getValue();
         if (!category) return null;
         return (
-          <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-bg-subtle rounded">
+          <div className="inline-flex items-center gap-1 px-2 py-1 bg-bg-subtle border border-border-base rounded-[6px]">
             <div 
               className="w-1.5 h-1.5 rounded-full flex-shrink-0" 
               style={{ backgroundColor: category.color }}
             />
-            <span className="text-xs font-medium text-fg-subtle leading-4">{category.label}</span>
+            <span className="text-xs text-fg-base leading-4">{category.label}</span>
           </div>
         );
       },
     }),
     columnHelper.accessor('createdBy', {
       header: 'Created by',
-      cell: info => (
-        <span className="text-sm text-fg-subtle leading-5">{info.getValue()}</span>
-      ),
+      cell: info => {
+        const creator = info.getValue();
+        const isHarvey = creator === 'Harvey';
+        return (
+          <div className="flex items-center gap-1.5">
+            {isHarvey ? (
+              <img src="/harvey-glyph.png" alt="Harvey" className="w-4 h-4 rounded-full shrink-0" />
+            ) : (
+              <div className="w-4 h-4 rounded-full bg-bg-subtle-pressed flex items-center justify-center text-[9px] font-medium text-fg-base shrink-0">
+                {creator.charAt(0)}
+              </div>
+            )}
+            <span className="text-sm text-fg-subtle leading-5">{creator}</span>
+          </div>
+        );
+      },
     }),
     columnHelper.accessor('uploadedAt', {
       header: 'Last modified',
@@ -507,11 +673,32 @@ export default function FilesPage() {
         <span className="text-sm text-fg-subtle leading-5">{formatFileSize(info.getValue())}</span>
       ),
     }),
-  ], []);
+  ], [starredFileIds, toggleStarred, hoveredRowId]);
   
+  // Apply starred filter and NL search filter
+  const displayFiles = useMemo(() => {
+    let files = currentFiles;
+    if (starredFilterActive) {
+      files = files.filter(f => starredFileIds.has(f.id));
+    }
+    if (searchFilterQuery) {
+      const words = searchFilterQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      files = files.filter(f => {
+        const name = f.name.toLowerCase();
+        const cat = f.category?.label?.toLowerCase() || '';
+        const creator = f.createdBy.toLowerCase();
+        return words.some(w => name.includes(w) || cat.includes(w) || creator.includes(w));
+      });
+    }
+    if (searchPersonFilter) {
+      files = files.filter(f => f.createdBy === searchPersonFilter);
+    }
+    return files;
+  }, [currentFiles, starredFilterActive, starredFileIds, searchFilterQuery, searchPersonFilter]);
+
   // TanStack Table instance
   const table = useReactTable({
-    data: currentFiles,
+    data: displayFiles,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
@@ -754,18 +941,32 @@ export default function FilesPage() {
     }, 2500);
   }, [chatInputValue, isLoading, ensureChatExists, updateChatById, scrollToBottom]);
 
+  const triggerNlSearch = useCallback((query: string) => {
+    setIsSearchFocused(false);
+    setIsChatPanelOpen(true);
+    setSearchFilterQuery(query);
+    setTimeout(() => {
+      sendMessage(query);
+    }, 300);
+  }, [sendMessage]);
+  triggerNlSearchRef.current = triggerNlSearch;
+
   const generateResponse = (query: string): string => {
     const lowerQuery = query.toLowerCase();
     
-    if (lowerQuery.includes('compliance') || lowerQuery.includes('finding')) {
-      return "Based on the documents in your files, I can help you analyze the compliance findings. The collection contains 156 files including policy documents, audit reports, regulatory correspondence, and evidence files. Would you like me to generate a compliance summary or identify areas requiring immediate attention?";
-    } else if (lowerQuery.includes('gap') || lowerQuery.includes('risk') || lowerQuery.includes('issue')) {
-      return "I've identified several compliance gaps based on the uploaded documents:\n\n1. **Data Privacy**: GDPR documentation needs updating for new processing activities\n2. **SOX Controls**: Two control deficiencies noted in Q4 testing\n3. **AML Procedures**: Customer due diligence documentation incomplete for 3 accounts\n\nWould you like me to draft a remediation plan for any of these areas?";
-    } else if (lowerQuery.includes('checklist') || lowerQuery.includes('audit')) {
-      return "Based on the regulatory requirements, here's the audit checklist status:\n\n• **Data Protection**: 85% complete - pending privacy impact assessments\n• **Financial Controls**: 92% complete - minor documentation gaps\n• **Operational Risk**: 78% complete - policies under review\n• **Third-Party Management**: 70% complete - vendor assessments in progress\n\nWould you like me to generate detailed action items for any category?";
+    if (lowerQuery.includes('supply') || lowerQuery.includes('agreement')) {
+      return "I found **4 supply agreements** and **2 license agreements** in your files that match your search:\n\n• **Aquametals_Supply_Agreement.pdf** — uploaded Feb 26, 2026 by Emily Zhang\n• **GNC_Supply_Agreement.pdf** — uploaded Feb 21, 2026 by Michael Ross\n• **Delta_Inventory_Supply_Agreement.pdf** — uploaded Feb 19, 2026\n• **Macrogenics_Commercial_Supply.pdf** — uploaded Feb 24, 2026\n\nI've filtered the file list on the left to show these results. The supply agreements are primarily in the Due Diligence Reports folder.";
+    } else if (lowerQuery.includes('compliance') || lowerQuery.includes('finding') || lowerQuery.includes('audit')) {
+      return "I found **8 compliance-related documents** across your files:\n\n• **Q4_2025_Compliance_Report.pdf** — Audit Report, by Harvey\n• **GDPR_Policy_v3.2.docx** — Compliance Policy, by Emily Zhang\n• **Board_Compliance_Report.pdf** — Audit Report, by Michael Ross\n• **KYC_Documentation_Guide.docx** — Compliance Policy\n\nI've filtered the file list to show all matching documents. These span multiple categories including Audit Reports, Compliance Policies, and Evidence Files.";
+    } else if (lowerQuery.includes('risk') || lowerQuery.includes('assessment')) {
+      return "I found **5 risk assessment documents** in your files:\n\n• **SOX_Control_Testing.xlsx** — Risk Assessment\n• **Data_Privacy_Assessment.pdf** — Risk Assessment\n• **Vendor_Risk_Matrix.xlsx** — Risk Assessment\n• **Risk_Assessment_Framework.docx** — Risk Assessment\n\nThese documents cover SOX controls, data privacy, vendor risk, and general risk frameworks. I've updated the file list to show these results.";
+    } else if (lowerQuery.includes('emily') || lowerQuery.includes('zhang')) {
+      return "I found **7 files created by Emily Zhang**:\n\n• GDPR_Policy_v3.2.docx\n• Regulatory_Correspondence_SEC.pdf\n• Policy_Exception_Log.pdf\n• KYC_Documentation_Guide.docx\n• Anti_Bribery_Policy_2026.pdf\n\nEmily primarily works on compliance policies and regulatory filings. I've filtered the file list to show her documents.";
+    } else if (lowerQuery.includes('harvey')) {
+      return "I found **6 files generated by Harvey AI**:\n\n• Q4_2025_Compliance_Report.pdf — Audit Report\n• AML_Due_Diligence_Report.pdf — Audit Report\n• Internal_Audit_Findings.docx — Audit Report\n• Sanctions_Screening_Results.xlsx — Risk Assessment\n• Incident_Response_Plan.pdf — Compliance Policy\n\nHarvey-generated documents are primarily audit reports and compliance analyses. I've filtered the list to show these.";
     }
     
-    return `I'm analyzing the documents in your files related to "${query}". Based on the available materials, I can help you with regulatory analysis, policy review, or audit preparation. What specific aspect would you like me to focus on?`;
+    return `I searched across all your files for "${query}" and filtered the results on the left. The matching documents are highlighted based on filename, category, and creator relevance. Would you like me to refine the search or analyze any of these documents?`;
   };
 
   const getActivityIcon = (type: string) => {
@@ -827,10 +1028,193 @@ export default function FilesPage() {
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             {/* Page Header - top nav bar */}
             <div className="flex items-center justify-between px-3 py-3 border-b border-border-base shrink-0">
-              <div className="flex items-center gap-1">
-                <span className="text-sm font-medium text-fg-base" style={{ padding: '4px 6px' }}>Files</span>
+              <div className="flex items-center gap-1 shrink-0 w-[260px] min-w-0 overflow-hidden">
+                {isRoot ? (
+                  <span className="text-sm font-medium text-fg-base rounded-md" style={{ padding: '4px 6px' }}>Files</span>
+                ) : (
+                  <div className="flex items-center gap-0.5 text-sm whitespace-nowrap overflow-hidden">
+                    <span 
+                      className="text-fg-muted hover:text-fg-base hover:bg-bg-subtle cursor-pointer rounded-md transition-colors"
+                      style={{ padding: '4px 6px' }}
+                      onClick={() => router.push('/files')}
+                    >
+                      Files
+                    </span>
+                    {breadcrumbs.slice(1).map((crumb, i) => (
+                      <div key={crumb.href} className="flex items-center gap-0.5">
+                        <ChevronRight className="h-3 w-3 text-fg-muted" />
+                        {i < breadcrumbs.length - 2 ? (
+                          <span
+                            className="text-fg-muted hover:text-fg-base hover:bg-bg-subtle cursor-pointer rounded-md transition-colors"
+                            style={{ padding: '4px 6px' }}
+                            onClick={() => router.push(crumb.href)}
+                          >
+                            {crumb.label}
+                          </span>
+                        ) : (
+                          <span className="font-medium text-fg-base rounded-md" style={{ padding: '4px 6px' }}>{crumb.label}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-2">
+
+              {/* Centered Search Bar with cmdk */}
+              <div ref={searchContainerRef} className="flex-1 flex justify-center px-4 relative">
+                <Command
+                  shouldFilter={false}
+                  className={cn(
+                    "relative bg-bg-base rounded-[8px] transition-all overflow-visible h-[32px] box-border",
+                    isSearchFocused ? "w-[550px] border-2 border-fg-base" : "w-[400px] border border-border-base"
+                  )}
+                >
+                <div className="flex items-center h-full">
+                  <Search className="w-4 h-4 text-fg-muted ml-3 shrink-0" />
+                  {searchPersonFilter && (
+                    <div className="inline-flex items-center gap-1 pl-1 pr-2 py-0.5 bg-bg-subtle rounded-full text-xs text-fg-base ml-2 shrink-0">
+                      <div className="w-4 h-4 rounded-full bg-bg-subtle-pressed flex items-center justify-center text-[9px] font-medium text-fg-base">
+                        {searchPersonFilter.charAt(0)}
+                      </div>
+                      <span className="text-xs">{searchPersonFilter}</span>
+                    </div>
+                  )}
+                  <Command.Input
+                    ref={searchInputRef}
+                    placeholder={searchPersonFilter ? "Add search terms to improve your results" : "Search with Harvey"}
+                    value={searchQuery}
+                    onValueChange={setSearchQuery}
+                    onFocus={() => setIsSearchFocused(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSearchEnter();
+                      }
+                      if (e.key === 'Escape') {
+                        setIsSearchFocused(false);
+                        searchInputRef.current?.blur();
+                      }
+                    }}
+                    className="flex-1 bg-transparent border-none outline-none text-sm text-fg-base placeholder:text-fg-muted px-2 h-full m-0 py-0"
+                  />
+                  {searchQuery || searchPersonFilter ? (
+                    <button
+                      onClick={() => { setSearchQuery(''); setSearchPersonFilter(null); searchInputRef.current?.focus(); }}
+                      className="w-7 h-7 flex items-center justify-center mr-0.5 hover:bg-bg-subtle rounded-md transition-colors"
+                    >
+                      <X className="w-4 h-4 text-fg-muted" />
+                    </button>
+                  ) : !isSearchFocused ? (
+                    <div className="flex items-center justify-center w-5 px-1 py-0.5 bg-bg-subtle border border-border-base rounded mr-1">
+                      <span className="text-xs font-semibold text-fg-muted leading-4">/</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* cmdk dropdown */}
+                {isSearchFocused && (
+                  <Command.List className="absolute top-[36px] left-[-2px] right-[-2px] bg-bg-base border border-border-base rounded-[10px] shadow-lg overflow-hidden z-50 py-1">
+                    {!searchQuery ? (
+                      <Command.Group heading="Recently used" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-fg-muted">
+                        {recentlyUsed.map(file => (
+                          <Command.Item
+                            key={file.id}
+                            value={file.name}
+                            onSelect={() => handleSearchFileClick(file)}
+                            className="flex items-center gap-2 px-3 py-2 cursor-pointer rounded-[6px] mx-1 text-left data-[selected=true]:bg-bg-subtle"
+                          >
+                            <img src={getFileIconPath(file.name, file.type)} alt="" className="w-4 h-4 shrink-0" />
+                            <span className="text-sm text-fg-base truncate flex-1">{file.name}</span>
+                            <span className="text-xs text-fg-muted shrink-0">
+                              {file.uploadedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                          </Command.Item>
+                        ))}
+                      </Command.Group>
+                    ) : isNaturalLanguage(searchQuery) ? (
+                      <>
+                        {nlSuggestions.map((s, i) => (
+                          <Command.Item
+                            key={`nl-${i}`}
+                            value={`${s.prefix} ${s.completion}`}
+                            onSelect={() => handleNlSuggestionClick(s)}
+                            className="flex items-center gap-2 px-3 py-2.5 cursor-pointer rounded-[6px] mx-1 data-[selected=true]:bg-bg-subtle"
+                          >
+                            <Search className="w-4 h-4 text-fg-muted shrink-0" />
+                            <span className="text-sm text-fg-base truncate flex-1">
+                              <span className="font-medium">{s.prefix}</span>
+                              {' '}
+                              <span className="text-fg-muted">{s.completion}</span>
+                            </span>
+                            <ChevronRight className="w-4 h-4 text-fg-muted shrink-0" />
+                          </Command.Item>
+                        ))}
+                        <Command.Separator className="h-px bg-border-base mx-1 my-1" />
+                        <div className="px-3 py-2 flex items-center gap-2">
+                          <img src="/harvey-glyph.png" alt="Harvey" className="w-4 h-4 rounded-[3px] shrink-0" />
+                          <span className="text-xs text-fg-muted">For the best results we are using Harvey agent to search your files</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {searchPeople.length > 0 && (
+                          <Command.Group heading="People" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-fg-muted">
+                            <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
+                              {searchPeople.map(person => (
+                                <button
+                                  key={person}
+                                  onClick={() => {
+                                    setSearchPersonFilter(person);
+                                    setSearchQuery('');
+                                    setIsSearchFocused(false);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 pl-1 pr-2 py-1 bg-bg-subtle hover:bg-bg-subtle-hover rounded-full text-xs text-fg-base cursor-pointer transition-colors"
+                                >
+                                  <div className="w-4 h-4 rounded-full bg-bg-subtle-pressed flex items-center justify-center text-[9px] font-medium text-fg-base">
+                                    {person.charAt(0)}
+                                  </div>
+                                  {person}
+                                </button>
+                              ))}
+                            </div>
+                          </Command.Group>
+                        )}
+                        {searchResults.length > 0 && (
+                          <Command.Group heading="Results" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-fg-muted">
+                            {searchResults.map(file => (
+                              <Command.Item
+                                key={file.id}
+                                value={file.name}
+                                onSelect={() => handleSearchFileClick(file)}
+                                className="flex items-center gap-2 px-3 py-2 cursor-pointer rounded-[6px] mx-1 data-[selected=true]:bg-bg-subtle"
+                              >
+                                <img src={getFileIconPath(file.name, file.type)} alt="" className="w-4 h-4 shrink-0" />
+                                <span className="text-sm text-fg-base truncate flex-1">{file.name}</span>
+                                <span className="text-xs text-fg-muted shrink-0">
+                                  {file.uploadedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                </span>
+                              </Command.Item>
+                            ))}
+                          </Command.Group>
+                        )}
+                        <Command.Separator className="h-px bg-border-base mx-1 my-1" />
+                        <Command.Item
+                          value={`ask-harvey-${searchQuery}`}
+                          onSelect={handleAskHarvey}
+                          className="flex items-center gap-2 px-3 py-2.5 cursor-pointer rounded-[6px] mx-1 data-[selected=true]:bg-bg-subtle"
+                        >
+                          <img src="/harvey-glyph.png" alt="Harvey" className="w-4 h-4 rounded-[3px] shrink-0" />
+                          <span className="text-sm text-fg-base truncate flex-1">{searchQuery}</span>
+                          <span className="text-xs text-fg-muted shrink-0">Ask Harvey</span>
+                        </Command.Item>
+                      </>
+                    )}
+                  </Command.List>
+                )}
+                </Command>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 w-[260px] justify-end">
                 {!isChatPanelOpen && (
                   <button 
                     onClick={() => setIsChatPanelOpen(true)}
@@ -852,28 +1236,8 @@ export default function FilesPage() {
             
             {/* Main Content Panel */}
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-              {/* Content header: breadcrumb + title + actions */}
+              {/* Content header: title + actions */}
               <div className="px-6 pt-6 pb-4 shrink-0">
-                {/* Breadcrumb (folder views only) */}
-                {!isRoot && breadcrumbs.length > 0 && (
-                  <div className="flex items-center gap-1 mb-1">
-                    {breadcrumbs.map((crumb, i) => (
-                      <div key={crumb.href} className="flex items-center gap-1">
-                        {i > 0 && <ChevronRight className="w-3 h-3 text-fg-muted" />}
-                        {i < breadcrumbs.length - 1 ? (
-                          <button
-                            onClick={() => router.push(crumb.href)}
-                            className="text-xs text-fg-muted hover:text-fg-base transition-colors"
-                          >
-                            {crumb.label}
-                          </button>
-                        ) : (
-                          <span className="text-xs text-fg-muted">{crumb.label}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
                 <div className="flex items-center justify-between">
                   <div className="flex items-baseline gap-2">
                     <h1 className="text-lg font-medium text-fg-base leading-7">{currentFolderName}</h1>
@@ -1055,7 +1419,7 @@ export default function FilesPage() {
                           exit={{ opacity: 0, y: 8 }}
                           transition={{ duration: 0.15, ease: 'easeOut' }}
                         >
-                          {!isRoot && (
+                          {!isRoot && (organizedFolders.length === 0 || summaryState === 'idle') && (
                             <>
                               {organizedFolders.length === 0 && (
                                 <button 
@@ -1079,9 +1443,17 @@ export default function FilesPage() {
                               <div className="h-5 w-px bg-border-base" />
                             </>
                           )}
-                          <button className="h-[28px] px-2 text-sm font-medium text-fg-base bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors">
+                          <button 
+                            onClick={() => setStarredFilterActive(prev => !prev)}
+                            className={cn(
+                              "h-[28px] px-2 text-sm font-medium rounded-[6px] border flex items-center gap-1.5 transition-colors",
+                              starredFilterActive 
+                                ? "text-fg-base border-fg-base bg-bg-subtle-pressed" 
+                                : "text-fg-base bg-bg-base border-border-base hover:bg-bg-subtle"
+                            )}
+                          >
                             Starred
-                            <Star className="w-4 h-4" />
+                            <Star className="w-4 h-4" fill={starredFilterActive ? "currentColor" : "none"} />
                           </button>
                           <button className="h-[28px] px-2 text-sm font-medium text-fg-base bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors">
                             Type
@@ -1119,6 +1491,7 @@ export default function FilesPage() {
                     </AnimatedBackground>
                   </div>
               </div>
+
 
               {/* Scrollable content area */}
               <div ref={scrollAreaRef} className="flex-1 overflow-y-auto overflow-x-hidden px-6 relative">
@@ -1175,7 +1548,7 @@ export default function FilesPage() {
                     <button className="flex-1 min-w-0 flex items-center gap-2 h-full px-1 py-3 cursor-pointer overflow-hidden" onClick={() => table.getColumn('category')?.toggleSorting()}>
                       <span className="text-xs font-medium text-fg-muted leading-4">Category</span>
                     </button>
-                    <div className="w-[120px] flex items-center gap-2 h-full px-1 py-3 shrink-0">
+                    <div className="w-[200px] flex items-center gap-2 h-full px-1 py-3 shrink-0">
                       <span className="text-xs font-medium text-fg-muted leading-4">Created by</span>
                     </div>
                     <button className="w-[140px] flex items-center gap-2 h-full px-1 py-3 cursor-pointer shrink-0" onClick={() => table.getColumn('uploadedAt')?.toggleSorting()}>
@@ -1235,7 +1608,7 @@ export default function FilesPage() {
                             })()}
                           </div>
                           
-                          <div className="w-[120px] flex items-center h-full px-1 py-3 shrink-0 z-10">
+                          <div className="w-[200px] flex items-center h-full px-1 py-3 shrink-0 z-10">
                             {(() => {
                               const cell = row.getVisibleCells().find(c => c.column.id === 'createdBy');
                               return cell ? flexRender(cell.column.columnDef.cell, cell.getContext()) : null;
@@ -1323,7 +1696,7 @@ export default function FilesPage() {
                 {/* Grid View */}
                 {viewMode === "grid" && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-6">
-                  {currentFiles.map((file) => {
+                  {displayFiles.map((file) => {
                     const iconSrc = getFileIconPath(file.name, file.type);
                     const isFolder = file.type === 'folder';
                     return (
@@ -1379,6 +1752,20 @@ export default function FilesPage() {
                 </div>
                 )}
               </div>
+              {/* Search filter indicator - bottom bar */}
+              {(searchFilterQuery || searchPersonFilter) && (
+                <div className="flex items-center justify-between px-6 py-2 bg-bg-subtle border-t border-border-base shrink-0">
+                  <span className="text-xs text-fg-muted">
+                    {searchPersonFilter ? `Showing files by ${searchPersonFilter}` : `Showing results for "${searchFilterQuery}"`}
+                  </span>
+                  <button
+                    onClick={() => { setSearchFilterQuery(''); setSearchQuery(''); setSearchPersonFilter(null); }}
+                    className="text-xs font-medium text-fg-base hover:text-fg-base hover:bg-bg-subtle-hover rounded-md px-2 py-1 transition-colors"
+                  >
+                    Clear filter
+                  </button>
+                </div>
+              )}
             </div>
           </div>
           
