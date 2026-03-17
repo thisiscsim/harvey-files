@@ -31,6 +31,7 @@ import { TextLoop } from "../../../components/motion-primitives/text-loop";
 import { TextShimmer } from "../../../components/motion-primitives/text-shimmer";
 import ThinkingState from "@/components/thinking-state";
 import { Command } from "cmdk";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -69,6 +70,13 @@ const formatFileSize = (bytes: number): string => {
 };
 
 const toSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+const PDF_THUMBNAILS = ['/pdf_thumbnail_4.svg', '/pdf_thumbnail_4.svg', '/pdf_thumbnail_4.svg', '/pdf_thumbnail_1.svg', '/pdf_thumbnail_2.svg', '/pdf_thumbnail_3.svg'];
+const getFileThumbnail = (fileId: string): string => {
+  let hash = 0;
+  for (let i = 0; i < fileId.length; i++) hash = ((hash << 5) - hash + fileId.charCodeAt(i)) | 0;
+  return PDF_THUMBNAILS[Math.abs(hash) % PDF_THUMBNAILS.length];
+};
 
 const getFileIconPath = (fileName: string, mimeType: string): string => {
   const lowerName = fileName.toLowerCase();
@@ -424,18 +432,20 @@ export default function FilesPage() {
   const nlSuggestions = useMemo(() => {
     if (!searchQuery || !isNaturalLanguage(searchQuery)) return [];
     const q = searchQuery.toLowerCase().trim();
-    const completions = [
-      'all supply agreements',
-      'compliance reports from last quarter',
-      'files created by Harvey',
-      'risk assessment documents',
-      'audit findings and recommendations',
-      'regulatory filings from 2026',
-      'documents from Emily Zhang',
-      'due diligence materials',
+    
+    const modifiers = [
+      'uploaded this week',
+      'from last quarter',
+      'created by Harvey',
+      'from Emily Zhang',
+      'in Due Diligence Reports',
+      'in all folders',
+      'sorted by date',
+      'with annotations',
     ];
-    const filtered = completions.filter(c => !q.includes(c.split(' ')[0]));
-    return filtered.slice(0, 4).map(c => ({ prefix: searchQuery, completion: c }));
+
+    const filtered = modifiers.filter(m => !q.includes(m.split(' ')[0].toLowerCase()));
+    return filtered.slice(0, 4).map(m => ({ prefix: searchQuery, completion: m }));
   }, [searchQuery, isNaturalLanguage]);
 
   const searchResults = useMemo(() => {
@@ -518,6 +528,11 @@ export default function FilesPage() {
     setSearchQuery(fullQuery);
     triggerNlSearchRef.current(fullQuery);
   }, []);
+
+  // File previewer state
+  const [previewFile, setPreviewFile] = useState<UploadedFile | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(50);
+  const zoomLevels = [25, 50, 75, 100, 150, 200];
 
   // Drag and drop state
   const [isDragOver, setIsDragOver] = useState(false);
@@ -759,19 +774,23 @@ export default function FilesPage() {
       files = files.filter(f => starredFileIds.has(f.id));
     }
     if (searchFilterQuery) {
-      const words = searchFilterQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      files = files.filter(f => {
-        const name = f.name.toLowerCase();
-        const cat = f.category?.label?.toLowerCase() || '';
-        const creator = f.createdBy.toLowerCase();
-        return words.some(w => name.includes(w) || cat.includes(w) || creator.includes(w));
-      });
+      const stopWords = new Set(['the', 'all', 'find', 'show', 'get', 'give', 'list', 'for', 'and', 'from', 'with', 'that', 'this', 'are', 'was', 'has', 'have', 'been', 'what', 'where', 'how', 'which', 'who']);
+      const words = searchFilterQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+      if (words.length > 0) {
+        const allSearchable = [...mergedFiles, ...organizedFolders];
+        files = allSearchable.filter(f => {
+          const name = f.name.toLowerCase();
+          const cat = f.category?.label?.toLowerCase() || '';
+          const creator = f.createdBy.toLowerCase();
+          return words.some(w => name.includes(w) || cat.includes(w) || creator.includes(w));
+        });
+      }
     }
     if (searchPersonFilter) {
       files = files.filter(f => f.createdBy === searchPersonFilter);
     }
     return files;
-  }, [currentFiles, starredFilterActive, starredFileIds, searchFilterQuery, searchPersonFilter]);
+  }, [currentFiles, starredFilterActive, starredFileIds, searchFilterQuery, searchPersonFilter, mergedFiles, organizedFolders]);
 
   // TanStack Table instance
   const table = useReactTable({
@@ -1021,17 +1040,21 @@ export default function FilesPage() {
   const triggerNlSearch = useCallback((query: string) => {
     setIsSearchFocused(false);
     setIsChatPanelOpen(true);
-    setSearchFilterQuery(query);
     setTimeout(() => {
       sendMessage(query);
     }, 300);
+    setTimeout(() => {
+      setSearchFilterQuery(query);
+    }, 3000);
   }, [sendMessage]);
   triggerNlSearchRef.current = triggerNlSearch;
 
   const generateResponse = (query: string): string => {
     const lowerQuery = query.toLowerCase();
     
-    if (lowerQuery.includes('supply') || lowerQuery.includes('agreement')) {
+    if (lowerQuery.includes('lease')) {
+      return "I found several **lease agreements** in your files that match your search. I've identified the following documents containing 'lease' in their names and filtered the file list on the left to show these results.\n\nThe lease documents appear to be recently uploaded and span various property and commercial lease arrangements. Would you like me to summarize the key terms across these agreements or compare specific clauses?";
+    } else if (lowerQuery.includes('supply') || lowerQuery.includes('agreement')) {
       return "I found **4 supply agreements** and **2 license agreements** in your files that match your search:\n\n• **Aquametals_Supply_Agreement.pdf** — uploaded Feb 26, 2026 by Emily Zhang\n• **GNC_Supply_Agreement.pdf** — uploaded Feb 21, 2026 by Michael Ross\n• **Delta_Inventory_Supply_Agreement.pdf** — uploaded Feb 19, 2026\n• **Macrogenics_Commercial_Supply.pdf** — uploaded Feb 24, 2026\n\nI've filtered the file list on the left to show these results. The supply agreements are primarily in the Due Diligence Reports folder.";
     } else if (lowerQuery.includes('compliance') || lowerQuery.includes('finding') || lowerQuery.includes('audit')) {
       return "I found **8 compliance-related documents** across your files:\n\n• **Q4_2025_Compliance_Report.pdf** — Audit Report, by Harvey\n• **GDPR_Policy_v3.2.docx** — Compliance Policy, by Emily Zhang\n• **Board_Compliance_Report.pdf** — Audit Report, by Michael Ross\n• **KYC_Documentation_Guide.docx** — Compliance Policy\n\nI've filtered the file list to show all matching documents. These span multiple categories including Audit Reports, Compliance Policies, and Evidence Files.";
@@ -1232,8 +1255,18 @@ export default function FilesPage() {
                             <ChevronRight className="w-4 h-4 text-fg-muted shrink-0" />
                           </Command.Item>
                         ))}
+                        <Command.Item
+                          key="nl-exact"
+                          value={searchQuery}
+                          onSelect={() => triggerNlSearchRef.current(searchQuery)}
+                          className="flex items-center gap-2 px-3 py-2.5 cursor-pointer rounded-[6px] mx-1 data-[selected=true]:bg-bg-subtle"
+                        >
+                          <Search className="w-4 h-4 text-fg-muted shrink-0" />
+                          <span className="text-sm text-fg-base font-medium truncate flex-1">{searchQuery}</span>
+                          <ChevronRight className="w-4 h-4 text-fg-muted shrink-0" />
+                        </Command.Item>
                         <Command.Separator className="h-px bg-border-base mx-1 my-1" />
-                        <div className="px-3 py-2 flex items-center gap-2">
+                        <div className="px-4 py-2 flex items-center gap-2">
                           <img src="/harvey-glyph.png" alt="Harvey" className="w-4 h-4 rounded-[3px] shrink-0" />
                           <span className="text-xs text-fg-muted">For the best results we are using Harvey agent to search your files</span>
                         </div>
@@ -1332,7 +1365,7 @@ export default function FilesPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="medium" className="gap-1.5">
-                      <FolderPlus className="h-4 w-4" />
+                      <SvgIcon src="/central_icons/Add Folder.svg" alt="Create folder" width={16} height={16} />
                       Create folder
                     </Button>
                     <Button variant="default" size="medium" className="gap-1.5">
@@ -1424,29 +1457,17 @@ export default function FilesPage() {
                         return (
                           <div
                             key={item.id}
-                            className="flex items-center w-[280px] h-[68px] shrink-0 rounded-lg border border-border-base hover:border-border-strong transition-colors cursor-pointer overflow-hidden"
+                            className="flex items-center w-[280px] h-[68px] shrink-0 rounded-lg bg-bg-subtle hover:bg-bg-subtle-hover transition-colors cursor-pointer overflow-hidden"
                             onClick={() => isFolder ? navigateToFolder(item) : undefined}
                           >
-                            <div className="w-[80px] h-full flex items-center justify-center bg-bg-subtle shrink-0">
+                            <div className="w-[80px] h-full flex items-center justify-center shrink-0">
                               {isFolder ? (
                                 <img src="/folderIcon.svg" alt="" className="w-8 h-8" />
                               ) : (
-                                <div className="relative w-[30px] h-[40px]">
-                                  <div className="absolute inset-0 bg-white rounded-[3px] border border-black/[0.06] shadow-xs" />
-                                  <div className="absolute top-[1px] left-[-2px] w-[30px] h-[40px] bg-white rounded-[3px] border border-black/[0.06] shadow-xs" />
-                                  <div className="absolute top-[-2px] left-[-4px] w-[30px] h-[40px] bg-white rounded-[3px] border border-black/[0.06] shadow-xs overflow-hidden p-1.5">
-                                    <div className="space-y-[3px]">
-                                      <div className="h-[2px] bg-fg-disabled/20 rounded-full w-[70%]" />
-                                      <div className="h-[2px] bg-fg-disabled/20 rounded-full w-full" />
-                                      <div className="h-[2px] bg-fg-disabled/20 rounded-full w-[85%]" />
-                                      <div className="h-[2px] bg-fg-disabled/20 rounded-full w-full" />
-                                      <div className="h-[2px] bg-fg-disabled/20 rounded-full w-[60%]" />
-                                    </div>
-                                  </div>
-                                </div>
+                                <img src={getFileThumbnail(item.id)} alt="" className="w-[27px] h-[38px] rounded-[2px]" />
                               )}
                             </div>
-                            <div className="flex-1 min-w-0 px-3 py-3">
+                            <div className="flex-1 min-w-0 pl-0 pr-3 py-3">
                               <p className="text-sm font-medium text-fg-base leading-5 truncate">{item.name}</p>
                               <p className="text-xs text-fg-muted leading-4">
                                 {isFolder ? `Folder · ${item.itemCount || 0} items` : `${ext} · ${formatFileSize(item.size)}`}
@@ -1478,11 +1499,11 @@ export default function FilesPage() {
                           </span>
                           <div className="h-5 w-px bg-border-base" />
                           <button className="h-[28px] px-2 text-sm font-medium text-fg-base bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors">
-                            <ArrowRightFromLine className="w-4 h-4" />
+                            <SvgIcon src="/central_icons/Move.svg" alt="Move" width={16} height={16} />
                             Move files
                           </button>
                           <button className="h-[28px] px-2 text-sm font-medium text-fg-base bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors">
-                            <FilePlus2 className="w-4 h-4" />
+                            <SvgIcon src="/central_icons/Add Folder.svg" alt="Create" width={16} height={16} />
                             Create files
                           </button>
                           <button className="h-[28px] px-2 text-sm font-medium text-fg-base bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors">
@@ -1511,7 +1532,7 @@ export default function FilesPage() {
                                   className="h-[28px] px-2 text-sm font-medium text-[#5f3ba5] bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   Organize my files
-                                  <Sparkles className="w-4 h-4" />
+                                  <SvgIcon src="/central_icons/Magic Broom.svg" alt="Organize" width={16} height={16} />
                                 </button>
                               )}
                               {summaryState === 'idle' && (
@@ -1520,7 +1541,7 @@ export default function FilesPage() {
                                   className="h-[28px] px-2 text-sm font-medium text-[#5f3ba5] bg-bg-base rounded-[6px] border border-border-base flex items-center gap-1.5 hover:bg-bg-subtle transition-colors"
                                 >
                                   Summarize folder
-                                  <BookOpen className="w-4 h-4" />
+                                  <SvgIcon src="/central_icons/Description.svg" alt="Summarize" width={16} height={16} />
                                 </button>
                               )}
                               <div className="h-5 w-px bg-border-base" />
@@ -1593,8 +1614,8 @@ export default function FilesPage() {
                       className="absolute flex items-center gap-1.5 px-2 py-1 rounded-md font-medium text-white"
                       style={{ top: '4px', left: '4px', backgroundColor: 'var(--color-violet-600, #7c3aed)', fontSize: '12px', lineHeight: '16px', zIndex: 31 }}
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Organizing files...</span>
+                        <SvgIcon src="/central_icons/Magic Broom.svg" alt="Organize" width={14} height={14} className="text-white" />
+                        <span>Organizing files...</span>
                     </div>
                   </div>
                 )}
@@ -1655,6 +1676,7 @@ export default function FilesPage() {
                           onMouseEnter={() => setHoveredRowId(file.id)}
                           onMouseLeave={() => setHoveredRowId(null)}
                           onClick={() => file.type === 'folder' && navigateToFolder(file)}
+                          onDoubleClick={() => { if (file.type !== 'folder') { setPreviewZoom(50); setPreviewFile(file); } }}
                         >
                           {isHovered && (
                             <div 
@@ -1721,10 +1743,7 @@ export default function FilesPage() {
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <button className="w-7 h-7 flex items-center justify-center rounded-[7px] text-fg-subtle hover:text-fg-base hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                          <path d="M2 5.5C2 4.67157 2.67157 4 3.5 4H6L7.5 6H12.5C13.3284 6 14 6.67157 14 7.5V11.5C14 12.3284 13.3284 13 12.5 13H3.5C2.67157 13 2 12.3284 2 11.5V5.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                          <path d="M9 8L11 10M11 10L9 12M11 10H6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
+                                        <SvgIcon src="/central_icons/Move.svg" alt="Move" width={16} height={16} />
                                       </button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top"><p>Move</p></TooltipContent>
@@ -1734,9 +1753,7 @@ export default function FilesPage() {
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <button className="w-7 h-7 flex items-center justify-center rounded-[7px] text-fg-subtle hover:text-fg-base hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                          <path d="M8 2V11M8 11L4 7M8 11L12 7M2 14H14" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
+                                        <SvgIcon src="/central_icons/Download.svg" alt="Download" width={16} height={16} className="text-fg-subtle" />
                                       </button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top"><p>Download</p></TooltipContent>
@@ -1746,9 +1763,7 @@ export default function FilesPage() {
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <button className="w-7 h-7 flex items-center justify-center rounded-[7px] text-fg-subtle hover:text-fg-base hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                          <path d="M11.5 2.5L13.5 4.5M2 14L2.5 11.5L12 2L14 4L4.5 13.5L2 14Z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
+                                        <SvgIcon src="/central_icons/Input.svg" alt="Rename" width={16} height={16} />
                                       </button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top"><p>Rename</p></TooltipContent>
@@ -1758,9 +1773,7 @@ export default function FilesPage() {
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <button className="w-7 h-7 flex items-center justify-center rounded-[7px] text-fg-subtle hover:text-fg-base hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                          <path d="M2 4H14M5 4V3C5 2.44772 5.44772 2 6 2H10C10.5523 2 11 2.44772 11 3V4M12 4V13C12 13.5523 11.5523 14 11 14H5C4.44772 14 4 13.5523 4 13V4H12Z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
+                                        <Trash2 className="w-4 h-4" />
                                       </button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top"><p>Delete</p></TooltipContent>
@@ -1783,12 +1796,11 @@ export default function FilesPage() {
                     const iconSrc = getFileIconPath(file.name, file.type);
                     const isFolder = file.type === 'folder';
                     return (
-                      <div key={file.id} className="cursor-pointer group" onClick={() => isFolder && navigateToFolder(file)}>
+                      <div key={file.id} className="cursor-pointer group" onClick={() => isFolder && navigateToFolder(file)} onDoubleClick={() => { if (!isFolder) { setPreviewZoom(50); setPreviewFile(file); } }}>
                         <div 
-                          className="w-full rounded-lg flex items-center justify-center mb-2.5 relative overflow-hidden" 
-                          style={{ height: '162px', backgroundColor: 'var(--bg-subtle)', transition: 'background-color 0.3s ease' }}
+                          className="w-full rounded-lg flex items-center justify-center mb-2.5 relative overflow-hidden bg-bg-subtle group-hover:bg-bg-subtle-hover"
+                          style={{ height: '162px', transition: 'background-color 0.3s ease' }}
                         >
-                          <div className="absolute inset-0 bg-transparent group-hover:bg-bg-subtle-hover transition-colors pointer-events-none" />
                           {isFolder ? (
                             <div 
                               className="w-[72px] h-[72px] relative z-10"
@@ -1805,22 +1817,7 @@ export default function FilesPage() {
                               }}
                             />
                           ) : (
-                            <div className="relative z-10 w-[90px] h-[120px] bg-white dark:bg-neutral-800 rounded shadow-xs border border-black/[0.04] dark:border-white/[0.08] p-3 overflow-hidden">
-                              <div className="space-y-[5px]">
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[70%]" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-full" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[85%]" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-full" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[60%]" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-full" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[75%]" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-full" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[50%]" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-full" />
-                                <div className="h-[3px] bg-fg-disabled/20 rounded-full w-[80%]" />
-                              </div>
-                              <img src={iconSrc} alt="" className="absolute bottom-1.5 right-1.5 w-6 h-6 object-contain" />
-                            </div>
+                            <img src={getFileThumbnail(file.id)} alt="" className="relative z-10 w-[72px] rounded-[3px]" style={{ boxShadow: '0 1.6px 10.4px 0 rgba(0, 0, 0, 0.10)' }} />
                           )}
                         </div>
                         <div>
@@ -2374,6 +2371,114 @@ export default function FilesPage() {
 
       {/* Upload toast */}
       <UploadToast />
+
+      {/* File Previewer Drawer */}
+      <Drawer open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
+        <DrawerContent className="max-h-[96vh] h-[96vh]">
+          {previewFile && (
+            <>
+              <DrawerHeader className="flex flex-row items-center justify-between border-b border-border-base px-6 py-4 bg-bg-base rounded-t-lg !text-left">
+                <div className="flex items-center gap-3 min-w-0">
+                  <img src={getFileIconPath(previewFile.name, previewFile.type)} alt="" className="w-8 h-8 shrink-0" />
+                  <div className="min-w-0">
+                    <DrawerTitle className="text-sm font-medium text-fg-base truncate">{previewFile.name}</DrawerTitle>
+                    <p className="text-xs text-fg-muted">{formatFileSize(previewFile.size)} · {previewFile.createdBy} · {previewFile.uploadedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {(() => {
+                    const previewableFiles = displayFiles.filter(f => f.type !== 'folder');
+                    const currentIdx = previewableFiles.findIndex(f => f.id === previewFile.id);
+                    return (
+                      <>
+                        <button
+                          onClick={() => { const prev = previewableFiles[currentIdx - 1]; if (prev) { setPreviewZoom(50); setPreviewFile(prev); } }}
+                          disabled={currentIdx <= 0}
+                          className="h-7 w-7 flex items-center justify-center rounded-[6px] hover:bg-bg-subtle transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ChevronLeft className="w-4 h-4 text-fg-base" />
+                        </button>
+                        <span className="text-xs text-fg-muted px-1">{currentIdx + 1} of {previewableFiles.length}</span>
+                        <button
+                          onClick={() => { const next = previewableFiles[currentIdx + 1]; if (next) { setPreviewZoom(50); setPreviewFile(next); } }}
+                          disabled={currentIdx >= previewableFiles.length - 1}
+                          className="h-7 w-7 flex items-center justify-center rounded-[6px] hover:bg-bg-subtle transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ChevronRight className="w-4 h-4 text-fg-base" />
+                        </button>
+                      </>
+                    );
+                  })()}
+                  <DrawerClose className="h-7 w-7 flex items-center justify-center rounded-[6px] hover:bg-bg-subtle transition-colors">
+                    <X className="w-4 h-4 text-fg-muted" />
+                  </DrawerClose>
+                </div>
+              </DrawerHeader>
+              {/* Toolbar */}
+              <div className="flex items-center justify-between px-6 py-2 bg-bg-base border-b border-border-base shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Assistant.svg" alt="Ask" width={14} height={14} />
+                    Ask in Harvey
+                  </button>
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Draft.svg" alt="Draft" width={14} height={14} />
+                    Edit in Draft
+                  </button>
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Search.svg" alt="Search" width={14} height={14} />
+                    Search
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Download.svg" alt="Download" width={14} height={14} />
+                    Download
+                  </button>
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Comment.svg" alt="Comment" width={14} height={14} />
+                    Comment
+                  </button>
+                  <button className="h-7 px-2.5 text-xs font-medium text-fg-base rounded-[6px] border border-border-base hover:bg-bg-subtle transition-colors flex items-center gap-1.5">
+                    <SvgIcon src="/central_icons/Share.svg" alt="Share" width={14} height={14} />
+                    Share
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto flex items-center justify-center p-8 bg-bg-subtle relative">
+                <img 
+                  src={getFileThumbnail(previewFile.id)} 
+                  alt={previewFile.name} 
+                  className="max-w-[400px] w-full rounded-lg transition-transform duration-200 origin-center"
+                  style={{ 
+                    transform: `scale(${previewZoom / 50})`,
+                    boxShadow: '0 4px 24px 0 rgba(0, 0, 0, 0.12)',
+                  }}
+                />
+                {/* Zoom controls */}
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-bg-base rounded-lg border border-border-base shadow-sm px-2 py-1.5">
+                  <button 
+                    onClick={() => setPreviewZoom(prev => { const idx = zoomLevels.indexOf(prev); return idx > 0 ? zoomLevels[idx - 1] : prev; })}
+                    disabled={previewZoom <= zoomLevels[0]}
+                    className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-bg-subtle transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.2"/><path d="M5.5 8H10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                  </button>
+                  <button 
+                    onClick={() => setPreviewZoom(prev => { const idx = zoomLevels.indexOf(prev); return idx < zoomLevels.length - 1 ? zoomLevels[idx + 1] : prev; })}
+                    disabled={previewZoom >= zoomLevels[zoomLevels.length - 1]}
+                    className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-bg-subtle transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.2"/><path d="M5.5 8H10.5M8 5.5V10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                  </button>
+                  <div className="h-5 w-px bg-border-base mx-0.5" />
+                  <span className="text-sm font-medium text-fg-base px-2 min-w-[48px] text-center">{previewZoom}%</span>
+                </div>
+              </div>
+            </>
+          )}
+        </DrawerContent>
+      </Drawer>
 
       {/* Drag and drop overlay */}
       <AnimatePresence>
